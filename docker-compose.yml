@@ -1,0 +1,15 @@
+services:
+  megabot: 
+    image: botmega
+    stdin_open: true # docker run -i
+    tty: true        # docker run -t
+    build:
+      context: .
+    volumes:
+      - D:\Documentos\bot:/app
+      - D:\series:/downloads
+    ports:
+      - "8000:8000"
+    environment:
+      - TOKEN=${TOKEN}
+    command: python /app/megabot.py
