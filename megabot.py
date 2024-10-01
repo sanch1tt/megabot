@@ -2,90 +2,17 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
-import threading
 import logging
 import math
+from requestlistener import RequestListener
+from transferlistener import TransferListener
+from mega import (MegaApi, MegaRequestListener, MegaNode)
 
-from mega import (MegaApi, MegaRequestListener, MegaError, MegaRequest, MegaTransfer,
-                  MegaUser, MegaNode)
-
-CHANNEL_ID = 415887620871159830
+BOT_TOKEN = os.getenv("TOKEN")
+API_KEY = os.getenv("API_KEY")
 logging.basicConfig(level=logging.INFO,
                     # filename='runner.log',
                     format='%(levelname)s\t%(asctime)s %(message)s')
-
-
-class AppListener(MegaRequestListener):
-    def __init__(self):
-        self.cwd = None
-        self.event = threading.Event()
-        super(AppListener, self).__init__()
-
-    def onRequestStart(self, api, request):
-        logging.info('Request start ({})'.format(request.getType()))
-
-    def onRequestFinish(self, api, request, error):
-        logging.info('Request finished ({}); Result: {}'
-                     .format(request, error))
-        if error.getErrorCode() != MegaError.API_OK:
-            self.event.set()
-            self.event.clear()
-            return
-
-        request_type = request.getType()
-        if request_type == MegaRequest.TYPE_LOGIN:
-            api.fetchNodes(self)
-        elif request_type == MegaRequest.TYPE_EXPORT:
-            logging.info('Exported link: {}'.format(request.getLink()))
-        elif request_type == MegaRequest.TYPE_ACCOUNT_DETAILS:
-            account_details = request.getMegaAccountDetails()
-            logging.info('Account details received')
-            logging.info('Account e-mail: {}'.format(api.getMyEmail()))
-            logging.info('Storage: {} of {} ({} %)'
-                         .format(account_details.getStorageUsed(),
-                                 account_details.getStorageMax(),
-                                 100 * account_details.getStorageUsed()
-                                 / account_details.getStorageMax()))
-            logging.info('Pro level: {}'.format(account_details.getProLevel()))
-        elif request_type == MegaRequest.TYPE_FETCH_NODES:
-            self.cwd = api.getRootNode().copy()
-        elif request_type == MegaRequest.TYPE_GET_PUBLIC_NODE:
-            self.cwd = request.getPublicMegaNode()
-
-        if request_type != MegaRequest.TYPE_LOGIN and request_type != MegaRequest.TYPE_DELETE:
-            self.event.set()
-            self.event.clear()
-
-    def onRequestTemporaryError(self, api, request, error):
-        logging.info('Request temporary error ({}); Error: {}'
-                     .format(request, error))
-
-    def onTransferFinish(self, api, transfer, error):
-        logging.info('Transfer finished ({}); Result: {}'
-                     .format(transfer, transfer.getFileName(), error))
-
-    def onTransferUpdate(self, api, transfer):
-        logging.info('Transfer update ({} {});'
-                     ' Progress: {} KB of {} KB, {} KB/s'
-                     .format(transfer,
-                             transfer.getFileName(),
-                             transfer.getTransferredBytes() / 1024,
-                             transfer.getTotalBytes() / 1024,
-                             transfer.getSpeed() / 1024))
-
-    def onTransferTemporaryError(self, api, transfer, error):
-        logging.info('Transfer temporary error ({} {}); Error: {}'
-                     .format(transfer, transfer.getFileName(), error))
-
-    def onUsersUpdate(self, api, users):
-        if users != None:
-            logging.info('Users updated ({})'.format(users.size()))
-
-    def onNodesUpdate(self, api, nodes):
-        if nodes != None:
-            logging.info('Nodes updated ({})'.format(nodes.size()))
-        else:
-            self._shell.cwd = api.getRootNode()
 
 
 class MegaSession(MegaRequestListener):
@@ -93,6 +20,8 @@ class MegaSession(MegaRequestListener):
     def __init__(self, api, listener):
         self._api = api
         self._listener = listener
+        self.backlog = []
+        self.current_dls = []
         super(MegaSession, self).__init__()
 
     def ls(self, path, files, depth):
@@ -100,16 +29,17 @@ class MegaSession(MegaRequestListener):
         if path == None:
             return 'INFO: Not logged in'
         if path.getType() == MegaNode.TYPE_FILE:
-            node_type = f'\u001b[0;41m{convert_size(path.getSize())}\u001b[0;0m'
-            files.append({"name":'\t'*depth+path.getName()+'\t'+node_type, "dir": path})
+            size = f'\u001b[0;41m{convert_size(path.getSize())}\u001b[0;0m'
+            files.append({"name": '\t'*depth+path.getName() +
+                         '\t'+size, "handle": path.getHandle()})
         else:
-            name = '\u001b[0;34m' + '\t'*depth+'./'+path.getName()+'\t' + '\u001b[0;0m'
-            files.append({"name":name, "dir": path})
+            name = '\u001b[0;34m' + '\t'*depth+'./' + \
+                path.getName()+'\t' + '\u001b[0;0m'
+            files.append({"name": name, "handle": path.getHandle()})
             children = self._api.getChildren(path)
 
             for i in range(children.size()):
-                self.ls(children.get(i),files,depth+1)
-        
+                self.ls(children.get(i), files, depth+1)
 
     def cd(self, arg):
         """Usage: cd [path]"""
@@ -120,7 +50,6 @@ class MegaSession(MegaRequestListener):
         if self._listener.cwd == None:
             print('INFO: Not logged in')
             return
-
         if len(args) == 0:
             self._listener.cwd = self._api.getRootNode()
             return
@@ -134,22 +63,24 @@ class MegaSession(MegaRequestListener):
             return
         self._listener.cwd = node
 
-    def get(self, arg):
+    def download(self, node, save_to):
         """Usage: get remotefile"""
-        args = arg.split()
-        if len(args) != 2:
-            print(self.get.__doc__)
-            return
+
         if self._listener.cwd == None:
             print('INFO: Not logged in')
-            # return
-
-        node = self._api.authorizeNode(self._listener.cwd)
+            return
+        transfer_listener = TransferListener()
+        # node = self._api.authorizeNode(node)
         if node == None:
-            print('Node not found: {}'.format(args[0]))
+            print('Node not found')
             return
         # , MegaTransfer.COLLISION_CHECK_FINGERPRINT, MegaTransfer.COLLISION_RESOLUTION_NEW_WITH_N)
-        self._api.startDownload(node, './')
+        print(node.getName())
+        self.current_dls.append(transfer_listener)
+        print(len(self.current_dls))
+        self._api.startDownload(
+            node, save_to+'/'+node.getName(), transfer_listener)
+        transfer_listener = None
 
     def pwd(self):
         """Usage: pwd"""
@@ -157,7 +88,7 @@ class MegaSession(MegaRequestListener):
             print('INFO: Not logged in')
             return
 
-        return self._api.getNodePath(self._listener.cwd)
+        return self._listener.cwd.getName()
 
     def export(self, arg):
         """Usage: export path"""
@@ -187,6 +118,7 @@ class MegaSession(MegaRequestListener):
         print('Bye!')
         return True
 
+
 def convert_size(size_bytes):
     if size_bytes == 0:
         return "0B"
@@ -195,15 +127,18 @@ def convert_size(size_bytes):
     p = math.pow(1024, i)
     s = round(size_bytes / p, 2)
     return "%s %s" % (s, size_name[i])
+
+
 def expand_ranges(msg):
     output = set()
-    for item in msg.content.split(','):
+    for item in msg.split(','):
         if '-' in item:
             start, end = map(int, item.split('-'))
             output.update(range(start, end + 1))
         else:
             output.add(int(item))
     return output
+
 
 class MyBot(commands.Cog):
     def __init__(self, bot):
@@ -216,14 +151,23 @@ class MyBot(commands.Cog):
         await ctx.send('Shutting down...')
         await self.bot.close()
 
+    async def update_status_message(self, status_message):
+        status_text = 'Current downloads:\n```ansi\n' + \
+            os.linesep.join([tl.getStatus()
+                             for tl in self.megaapi.current_dls])+'\n```'
+        await status_message.edit(content=status_text)
+
+    async def status_message_task(self, ctx):
+        status_message = await ctx.send("Starting downloads...")
+        while not all([dl.is_finished for dl in self.megaapi.current_dls]):
+            await self.update_status_message(status_message)
+            await asyncio.sleep(1)  # Update every second
+        await self.update_status_message(status_message)
+        self.megaapi.current_dls.clear()
+
     @commands.command()
     async def ping(self, ctx):
         await ctx.send("pong")
-
-    @commands.command()
-    async def add(self, ctx, x, y):
-        result = int(x)+int(y)
-        await ctx.send(f"{result}")
 
     @commands.command()
     async def dl(self, ctx, cat, link, *, flags: str = ''):
@@ -233,11 +177,18 @@ class MyBot(commands.Cog):
             case _:
                 await ctx.send("Category doesn't exist")
                 return
-        if '--sub' in flags.split():
+        split_flags = flags.split()
+        if '--sub' in split_flags:
             await ctx.send("Select the directory")
-
-        api = MegaApi('ox8xnQZL', None, None, 'megabot session')
-        listener = AppListener()
+        if '--dir' in split_flags:
+            try:
+                dir += '/'+split_flags[split_flags.index('--dir')+1].strip()
+                os.makedirs(dir, exist_ok=True)
+            except:
+                await ctx.send("Not a correct directory")
+                return
+        api = MegaApi(API_KEY, None, None, 'megabot session')
+        listener = RequestListener()
         print(link)
         self.megaapi = MegaSession(api,  listener)
         if any(f in link for f in ["folder", "#F!"]):
@@ -249,40 +200,77 @@ class MyBot(commands.Cog):
         listener = None
         if any(f in link for f in ["folder", "#F!"]):
             await ctx.send(f"Opened  folder `{self.megaapi.pwd()}`")
-          
             try:
-                await ctx.send("Opened  folder `" + self.megaapi.pwd() +"`")
                 files = []
-                self.megaapi.ls(self.megaapi._listener.cwd, files,0)
-                output = '```ansi'+os.linesep+os.linesep.join(str(i)+n["name"] for i,n in enumerate(files)) + '```'
-                await ctx.send( output )
+                self.megaapi.ls(self.megaapi._listener.cwd, files, 0)
+                output = '```ansi'+os.linesep + \
+                    os.linesep.join(str(i)+n["name"]
+                                    for i, n in enumerate(files)) + '```'
+                await ctx.send(output)
+                await ctx.send('Choose files to download')
             except:
                 await ctx.send("Couldn't open `" + link + '`')
                 self.megaapi = None
-                return 0
+                return
+            self.megaapi._api.authorizeNode(self.megaapi._listener.cwd)
             try:
-                msg = await bot.wait_for('message', timeout=60.0)
-                print(expand_ranges(msg))
+                def check(
+                    m): return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id
+                msg = await bot.wait_for('message', timeout=60.0, check=check)
+                # self.megaapi._api.authorizeNode(self.megaapi._listener.cwd)
+
             except asyncio.TimeoutError:
                 await ctx.send('You took too long to respond! Please try again.')
+                return
+            for n in expand_ranges(msg.content):
+                node = self.megaapi._api.getNodeByHandle(files[n]["handle"])
+                node = self.megaapi._api.authorizeNode(node)
+                print(node.getName())
+                self.megaapi.download(node, dir)
+                # If this is the first download, start the status updates
+                if len(self.megaapi.current_dls) == 1:
+                    asyncio.create_task(self.status_message_task(ctx))
         else:
-            await ctx.send("Opened  file `" + self.megaapi._listener.cwd.getName() +"`")
-     
+            files = []
+            self.megaapi.ls(self.megaapi._listener.cwd, files, 0)
+            question = await ctx.send("Found file:\n```ansi\n " + files[0]["name"] + "``` Do you want to download?")
+            await question.add_reaction('✅')
+            await question.add_reaction('❌')
+            def check(reaction, user): return str(reaction.emoji) in ['✅', '❌']
+            try:
+                reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
+                match str(reaction.emoji):
+                    case '✅':
+                        self.megaapi.download(self.megaapi._listener.cwd, dir)
+                        # If this is the first download, start the status updates
+                        if len(self.megaapi.current_dls) == 2:
+                            asyncio.create_task(
+                                self.update_status_message(ctx))
+                    case _:
+                        await self.cancel(ctx)
+            except asyncio.TimeoutError:
+                await ctx.send('You took too long to respond! Please try again.')
+                return
+            except Exception as e:
+                logging.error(f"Error downloding: {e}")
+                return
 
     @commands.command()
     async def ls(self, ctx):
         if self.megaapi != None:
             files = []
-            self.megaapi.ls(self.megaapi._listener.cwd, files,0)
-            output = '```ansi'+os.linesep+os.linesep.join(str(i)+n["name"] for i,n in enumerate(files)) + '```'
-            await ctx.send( output )
+            self.megaapi.ls(self.megaapi._listener.cwd, files, 0)
+            output = '```ansi'+os.linesep + \
+                os.linesep.join(str(i)+' '+n["name"]
+                                for i, n in enumerate(files)) + '```'
+            await ctx.send(output)
         else:
             await ctx.send("Start a session")
             return
 
     @commands.command()
     async def cancel(self, ctx):
-        await ctx.send("Cancelling the download of " + self.megaapi.pwd())
+        await ctx.send(f"Cancelling the download of `{self.megaapi.pwd()}`")
         self.megaapi = None
 
 
@@ -292,21 +280,20 @@ bot.add_cog(MyBot(bot))
 
 @bot.event
 async def on_ready():
-    print("Hello")
-    channel = bot.get_channel(CHANNEL_ID)
-    await channel.send("Hello I'm Megabot")
-    
-@bot.event
-async def on_message(message):
-    if message.author == bot.user:
-        return
-    # Process commands
-    await bot.process_commands(message)
+    print("Starting bot...")
+    try:
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                if channel.permissions_for(guild.me).send_messages:
+                    await channel.send("Hello I'm Megabot")
+    except:
+        print(F"Error entering channel with key {CHANNEL_ID}")
+
 
 async def main():
     async with bot:
         await bot.add_cog(MyBot(bot))
-        await bot.start(os.getenv("TOKEN"))
+        await bot.start(BOT_TOKEN)
 
 if __name__ == "__main__":
     asyncio.run(main())

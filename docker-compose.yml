@@ -6,10 +6,9 @@ services:
     build:
       context: .
     volumes:
-      - D:\Documentos\bot:/app
-      - D:\series:/downloads
+      - ./:/app
+      - ${DOWNLOADS_DIR}:/downloads
     ports:
       - "8000:8000"
-    environment:
-      - TOKEN=${TOKEN}
+    env_file:  ".env"
     command: python /app/megabot.py
