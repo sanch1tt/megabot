@@ -106,14 +106,9 @@ class MegaSession():
     def wait(self):
         self._listener.event.wait()
 
-    def quit(self, arg):
+    def quit(self):
         """Usage: quit"""
-        del self._api
-        print('Bye!')
-        return True
-
-    def exit(self, arg):
-        """Usage: exit"""
+        del self._listener
         del self._api
         print('Bye!')
         return True
@@ -148,23 +143,25 @@ class MyBot(commands.Cog):
     @commands.command()
     @commands.is_owner()  # Restrict this command to the bot owner
     async def quit(self, ctx):
+        print("Shutting down bot...")
         await ctx.send('Shutting down...')
-        self.megaapi.quit()
+        if self.megaapi:
+            self.megaapi.quit()
         await self.bot.close()
 
     def status_text(self):
         return 'Current downloads:\n```ansi\n' + \
             os.linesep.join([tl.getStatus()
                              for tl in self.megaapi.current_dls])+'\n```'
-        
-        
+
     async def update_status_message_task(self, status_message):
         while not all([dl.is_finished for dl in self.megaapi.current_dls]):
             await status_message.edit(content=self.status_text())
             await asyncio.sleep(1)  # Update every second
 
-    async def pause_button_task(self,ctx,status_message):
-        def check(reaction, user): return reaction.message.id == status_message.id and user == ctx.message.author and str(reaction.emoji) in ['▶', '⏸']
+    async def pause_button_task(self, ctx, status_message):
+        def check(reaction, user): return reaction.message.id == status_message.id and user == ctx.message.author and str(
+            reaction.emoji) in ['▶', '⏸']
         pause = False
         while True:
             reaction, user = await bot.wait_for('reaction_add', check=check)
@@ -175,12 +172,14 @@ class MyBot(commands.Cog):
                 await status_message.add_reaction('▶')
             else:
                 await status_message.add_reaction('⏸')
-                
+
     async def status_message_task(self, ctx):
         status_message = await ctx.send("Starting downloads...")
         await status_message.add_reaction('⏸')
-        update_status_task = asyncio.create_task(self.update_status_message_task(status_message))
-        pause_button_task = asyncio.create_task(self.pause_button_task(ctx, status_message))
+        update_status_task = asyncio.create_task(
+            self.update_status_message_task(status_message))
+        pause_button_task = asyncio.create_task(
+            self.pause_button_task(ctx, status_message))
         await update_status_task
         pause_button_task.cancel()
         await status_message.edit(content=self.status_text())
@@ -189,7 +188,6 @@ class MyBot(commands.Cog):
 
     @commands.command()
     async def ping(self, ctx):
-        await ctx.send(str(len(        self.megaapi.current_dls)))
         await ctx.send("pong")
 
     @commands.command()
@@ -259,7 +257,8 @@ class MyBot(commands.Cog):
             question = await ctx.send("Found file:\n```ansi\n " + files[0]["name"] + "``` Do you want to download?")
             await question.add_reaction('✅')
             await question.add_reaction('❌')
-            def check(reaction, user): return reaction.message.id == question.id and user == ctx.message.author and str(reaction.emoji) in ['✅', '❌']
+            def check(reaction, user): return reaction.message.id == question.id and user == ctx.message.author and str(
+                reaction.emoji) in ['✅', '❌']
             try:
                 reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
                 match str(reaction.emoji):
@@ -267,7 +266,7 @@ class MyBot(commands.Cog):
                         self.megaapi.download(self.megaapi._listener.cwd, dir)
                         # If this is the first download, start the status updates
                         if len(self.megaapi.current_dls) == 1:
-                             asyncio.create_task(self.status_message_task(ctx))
+                            asyncio.create_task(self.status_message_task(ctx))
                     case _:
                         await self.cancel(ctx)
             except asyncio.TimeoutError:
@@ -293,7 +292,7 @@ class MyBot(commands.Cog):
     @commands.command()
     async def cancel(self, ctx):
         if self.megaapi:
-            self.megaapi._api.cancelTransfers(MegaTransfer.TYPE_DOWNLOAD);
+            self.megaapi._api.cancelTransfers(MegaTransfer.TYPE_DOWNLOAD)
             await ctx.send(f"Cancelling the download of `{self.megaapi.pwd()}`")
             self.megaapi.current_dls.clear()
             await asyncio.sleep(1)
@@ -303,6 +302,7 @@ class MyBot(commands.Cog):
 
 
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
+
 
 @bot.event
 async def on_ready():
