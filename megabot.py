@@ -138,24 +138,24 @@ def expand_ranges(msg):
 class MyBot(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.megaapi = None
+        self.mega = None
 
     @commands.command()
     @commands.is_owner()  # Restrict this command to the bot owner
     async def quit(self, ctx):
         print("Shutting down bot...")
         await ctx.send('Shutting down...')
-        if self.megaapi:
-            self.megaapi.quit()
+        if self.mega:
+            self.mega.quit()
         await self.bot.close()
 
     def status_text(self):
         return 'Current downloads:\n```ansi\n' + \
             os.linesep.join([tl.getStatus()
-                             for tl in self.megaapi.current_dls])+'\n```'
+                             for tl in self.mega.current_dls])+'\n```'
 
     async def update_status_message_task(self, status_message):
-        while not all([dl.is_finished for dl in self.megaapi.current_dls]):
+        while not all([dl.is_finished for dl in self.mega.current_dls]):
             await status_message.edit(content=self.status_text())
             await asyncio.sleep(1)  # Update every second
 
@@ -167,7 +167,7 @@ class MyBot(commands.Cog):
             reaction, user = await bot.wait_for('reaction_add', check=check)
             pause = not pause
             await status_message.clear_reactions()
-            self.megaapi._api.pauseTransfers(pause)
+            self.mega._api.pauseTransfers(pause)
             if pause:
                 await status_message.add_reaction('▶')
             else:
@@ -183,8 +183,8 @@ class MyBot(commands.Cog):
         await update_status_task
         pause_button_task.cancel()
         await status_message.edit(content=self.status_text())
-        if self.megaapi:
-            self.megaapi.current_dls.clear()
+        if self.mega:
+            self.mega.current_dls.clear()
 
     @commands.command()
     async def ping(self, ctx):
@@ -211,19 +211,19 @@ class MyBot(commands.Cog):
         api = MegaApi(API_KEY, None, None, 'megabot session')
         listener = RequestListener()
         print(link)
-        self.megaapi = MegaSession(api,  listener)
+        self.mega = MegaSession(api,  listener)
         if any(f in link for f in ["folder", "#F!"]):
             api.loginToFolder(link.strip(), listener)
         else:
             api.getPublicNode(link.strip(), listener)
-        self.megaapi.wait()
+        self.mega.wait()
         api = None
         listener = None
         if any(f in link for f in ["folder", "#F!"]):
-            await ctx.send(f"Opened  folder `{self.megaapi.pwd()}`")
+            await ctx.send(f"Opened  folder `{self.mega.pwd()}`")
             try:
                 files = []
-                self.megaapi.ls(self.megaapi._listener.cwd, files, 0)
+                self.mega.ls(self.mega._listener.cwd, files, 0)
                 output = '```ansi'+os.linesep + \
                     os.linesep.join(str(i)+n["name"]
                                     for i, n in enumerate(files)) + '```'
@@ -231,29 +231,29 @@ class MyBot(commands.Cog):
                 await ctx.send('Choose files to download')
             except:
                 await ctx.send("Couldn't open `" + link + '`')
-                self.megaapi = None
+                self.mega = None
                 return
-            self.megaapi._api.authorizeNode(self.megaapi._listener.cwd)
+            self.mega._api.authorizeNode(self.mega._listener.cwd)
             try:
                 def check(
                     m): return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id
                 msg = await bot.wait_for('message', timeout=60.0, check=check)
-                # self.megaapi._api.authorizeNode(self.megaapi._listener.cwd)
+                # self.mega._api.authorizeNode(self.mega._listener.cwd)
 
             except asyncio.TimeoutError:
                 await ctx.send('You took too long to respond! Please try again.')
                 return
             for n in expand_ranges(msg.content):
-                node = self.megaapi._api.getNodeByHandle(files[n]["handle"])
-                node = self.megaapi._api.authorizeNode(node)
+                node = self.mega._api.getNodeByHandle(files[n]["handle"])
+                node = self.mega._api.authorizeNode(node)
                 print(node.getName())
-                self.megaapi.download(node, dir)
+                self.mega.download(node, dir)
                 # If this is the first download, start the status updates
-                if len(self.megaapi.current_dls) == 1:
+                if len(self.mega.current_dls) == 1:
                     asyncio.create_task(self.status_message_task(ctx))
         else:
             files = []
-            self.megaapi.ls(self.megaapi._listener.cwd, files, 0)
+            self.mega.ls(self.mega._listener.cwd, files, 0)
             question = await ctx.send("Found file:\n```ansi\n " + files[0]["name"] + "``` Do you want to download?")
             await question.add_reaction('✅')
             await question.add_reaction('❌')
@@ -263,9 +263,9 @@ class MyBot(commands.Cog):
                 reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
                 match str(reaction.emoji):
                     case '✅':
-                        self.megaapi.download(self.megaapi._listener.cwd, dir)
+                        self.mega.download(self.mega._listener.cwd, dir)
                         # If this is the first download, start the status updates
-                        if len(self.megaapi.current_dls) == 1:
+                        if len(self.mega.current_dls) == 1:
                             asyncio.create_task(self.status_message_task(ctx))
                     case _:
                         await self.cancel(ctx)
@@ -278,9 +278,9 @@ class MyBot(commands.Cog):
 
     @commands.command()
     async def ls(self, ctx):
-        if self.megaapi != None:
+        if self.mega != None:
             files = []
-            self.megaapi.ls(self.megaapi._listener.cwd, files, 0)
+            self.mega.ls(self.mega._listener.cwd, files, 0)
             output = '```ansi'+os.linesep + \
                 os.linesep.join(str(i)+' '+n["name"]
                                 for i, n in enumerate(files)) + '```'
@@ -291,12 +291,12 @@ class MyBot(commands.Cog):
 
     @commands.command()
     async def cancel(self, ctx):
-        if self.megaapi:
-            self.megaapi._api.cancelTransfers(MegaTransfer.TYPE_DOWNLOAD)
-            await ctx.send(f"Cancelling the download of `{self.megaapi.pwd()}`")
-            self.megaapi.current_dls.clear()
+        if self.mega:
+            self.mega._api.cancelTransfers(MegaTransfer.TYPE_DOWNLOAD)
+            await ctx.send(f"Cancelling the download of `{self.mega.pwd()}`")
+            self.mega.current_dls.clear()
             await asyncio.sleep(1)
-            self.megaapi = None
+            self.mega = None
         else:
             await ctx.send("No session open")
 
