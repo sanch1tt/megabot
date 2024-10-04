@@ -37,7 +37,7 @@ class TransferListener(MegaTransferListener):
                          .format(transfer, transfer.getFileName(), error))
             if error.getErrorCode() == MegaError.API_EINCOMPLETE:
                 logging.info('Download incomplete, retrying...')
-                api.retryTransfer(transfer)
+                #api.retryTransfer(transfer)
             else:
                 logging.warning(f'Unhandled error code: {error}')
         except Exception as e:
@@ -45,7 +45,7 @@ class TransferListener(MegaTransferListener):
             logging.debug(f"Error object: {error}, Type: {type(error)}")
 
     def onTransferUpdate(self, api, transfer):
-        self.speed = transfer.getMeanSpeed()
+        self.speed = transfer.getSpeed()
         self.progress = transfer.getTransferredBytes()/transfer.getTotalBytes()
         logging.info('Transfer update ({} {});'
                      ' Progress: {} KB of {} KB, {} KB/s'
@@ -58,7 +58,7 @@ class TransferListener(MegaTransferListener):
     def getStatus(self, size=25):
         if self.error:
             print(self.error)
-            return self.transfer_name + ': \u001b[0;31m' + self.error + '\u001b[0;0m'
+            return f'{self.transfer_name}: \u001b[0;31m{self.error}\u001b[0;0m'
         if self.is_finished:
             return f"{self.transfer_name} is done downloading"
         x = int(size*self.progress)

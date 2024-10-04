@@ -1,12 +1,13 @@
 import discord
 from discord.ext import commands
 import os
+import shlex
 import asyncio
 import logging
 import math
 from requestlistener import RequestListener
 from transferlistener import TransferListener
-from mega import (MegaApi, MegaRequestListener, MegaNode)
+from mega import (MegaApi, MegaNode, MegaTransfer)
 
 BOT_TOKEN = os.getenv("TOKEN")
 API_KEY = os.getenv("API_KEY")
@@ -15,14 +16,13 @@ logging.basicConfig(level=logging.INFO,
                     format='%(levelname)s\t%(asctime)s %(message)s')
 
 
-class MegaSession(MegaRequestListener):
+class MegaSession():
 
     def __init__(self, api, listener):
         self._api = api
         self._listener = listener
         self.backlog = []
         self.current_dls = []
-        super(MegaSession, self).__init__()
 
     def ls(self, path, files, depth):
 
@@ -149,24 +149,47 @@ class MyBot(commands.Cog):
     @commands.is_owner()  # Restrict this command to the bot owner
     async def quit(self, ctx):
         await ctx.send('Shutting down...')
+        self.megaapi.quit()
         await self.bot.close()
 
-    async def update_status_message(self, status_message):
-        status_text = 'Current downloads:\n```ansi\n' + \
+    def status_text(self):
+        return 'Current downloads:\n```ansi\n' + \
             os.linesep.join([tl.getStatus()
                              for tl in self.megaapi.current_dls])+'\n```'
-        await status_message.edit(content=status_text)
+        
+        
+    async def update_status_message_task(self, status_message):
+        while not all([dl.is_finished for dl in self.megaapi.current_dls]):
+            await status_message.edit(content=self.status_text())
+            await asyncio.sleep(1)  # Update every second
 
+    async def pause_button_task(self,ctx,status_message):
+        def check(reaction, user): return reaction.message.id == status_message.id and user == ctx.message.author and str(reaction.emoji) in ['▶', '⏸']
+        pause = False
+        while True:
+            reaction, user = await bot.wait_for('reaction_add', check=check)
+            pause = not pause
+            await status_message.clear_reactions()
+            self.megaapi._api.pauseTransfers(pause)
+            if pause:
+                await status_message.add_reaction('▶')
+            else:
+                await status_message.add_reaction('⏸')
+                
     async def status_message_task(self, ctx):
         status_message = await ctx.send("Starting downloads...")
-        while not all([dl.is_finished for dl in self.megaapi.current_dls]):
-            await self.update_status_message(status_message)
-            await asyncio.sleep(1)  # Update every second
-        await self.update_status_message(status_message)
-        self.megaapi.current_dls.clear()
+        await status_message.add_reaction('⏸')
+        update_status_task = asyncio.create_task(self.update_status_message_task(status_message))
+        pause_button_task = asyncio.create_task(self.pause_button_task(ctx, status_message))
+        await update_status_task
+        pause_button_task.cancel()
+        await status_message.edit(content=self.status_text())
+        if self.megaapi:
+            self.megaapi.current_dls.clear()
 
     @commands.command()
     async def ping(self, ctx):
+        await ctx.send(str(len(        self.megaapi.current_dls)))
         await ctx.send("pong")
 
     @commands.command()
@@ -177,7 +200,7 @@ class MyBot(commands.Cog):
             case _:
                 await ctx.send("Category doesn't exist")
                 return
-        split_flags = flags.split()
+        split_flags = shlex.split(flags)
         if '--sub' in split_flags:
             await ctx.send("Select the directory")
         if '--dir' in split_flags:
@@ -236,16 +259,15 @@ class MyBot(commands.Cog):
             question = await ctx.send("Found file:\n```ansi\n " + files[0]["name"] + "``` Do you want to download?")
             await question.add_reaction('✅')
             await question.add_reaction('❌')
-            def check(reaction, user): return str(reaction.emoji) in ['✅', '❌']
+            def check(reaction, user): return reaction.message.id == question.id and user == ctx.message.author and str(reaction.emoji) in ['✅', '❌']
             try:
                 reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
                 match str(reaction.emoji):
                     case '✅':
                         self.megaapi.download(self.megaapi._listener.cwd, dir)
                         # If this is the first download, start the status updates
-                        if len(self.megaapi.current_dls) == 2:
-                            asyncio.create_task(
-                                self.update_status_message(ctx))
+                        if len(self.megaapi.current_dls) == 1:
+                             asyncio.create_task(self.status_message_task(ctx))
                     case _:
                         await self.cancel(ctx)
             except asyncio.TimeoutError:
@@ -270,13 +292,17 @@ class MyBot(commands.Cog):
 
     @commands.command()
     async def cancel(self, ctx):
-        await ctx.send(f"Cancelling the download of `{self.megaapi.pwd()}`")
-        self.megaapi = None
+        if self.megaapi:
+            self.megaapi._api.cancelTransfers(MegaTransfer.TYPE_DOWNLOAD);
+            await ctx.send(f"Cancelling the download of `{self.megaapi.pwd()}`")
+            self.megaapi.current_dls.clear()
+            await asyncio.sleep(1)
+            self.megaapi = None
+        else:
+            await ctx.send("No session open")
 
 
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
-bot.add_cog(MyBot(bot))
-
 
 @bot.event
 async def on_ready():
@@ -287,7 +313,7 @@ async def on_ready():
                 if channel.permissions_for(guild.me).send_messages:
                     await channel.send("Hello I'm Megabot")
     except:
-        print(F"Error entering channel with key {CHANNEL_ID}")
+        print("Error starting the bot")
 
 
 async def main():
