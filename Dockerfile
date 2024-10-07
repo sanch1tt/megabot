@@ -23,5 +23,4 @@ RUN git clone https://github.com/meganz/sdk.git sdk && cd sdk \
 
 COPY requirements.txt requirements.txt
 RUN pip install -r requirements.txt
-COPY . .
-CMD ["python3", "./megabot.py"]
+CMD ["python3", "./app/megabot.py"]
