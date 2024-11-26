@@ -8,7 +8,7 @@ This Discord bot makes it possible to download files or folders from mega.nz usi
 
 **Set Up Environment Variables**:
    - Create a `.env` file in the project directory.
-   - Add your Discord bot token, Mega API key and directory to save downloads to the `.env` file:
+   - Add your Discord bot token, Mega API key and desired download directory to the `.env` file:
 
      ```
      TOKEN=your_discord_bot_token
