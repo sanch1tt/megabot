@@ -29,9 +29,9 @@ This Discord bot makes it possible to download files or folders from mega.nz usi
    - Generate an OAuth2 URL for your bot and invite it to your server.
 
 2. **Commands**:
-   - **`!dl [mega link]`**: Download a single file from the link. If the link is folder, the user can choose which to download.
-   - **`!ls`**: List files from current session
-   - **`!cancel`**: Close current session
+   - **`!dl [mega link]`**: Download a single file from the link. If the link is for a folder, the user can choose which to download.
+   - **`!ls`**: List files from current session.
+   - **`!cancel`**: Close current session.
 
 ---
 
