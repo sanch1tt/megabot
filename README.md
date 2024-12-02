@@ -1,7 +1,9 @@
 # Mega Downloader Discord Bot
 
 This Discord bot makes it possible to download files or folders from mega.nz using [**Mega SDK**](https://github.com/meganz/sdk). It supports single-file downloads as well as batch downloads of specified items from folder links. The bot is designed for Docker deployment.
-
+<p align="center">
+<img src="https://github.com/user-attachments/assets/9f72abf6-8c3b-4f6f-b38f-e1bfbf38550f" width="70%"/>
+</p>
 ---
 
 ## Installation and Deployment
