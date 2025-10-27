@@ -11,4 +11,4 @@ services:
     ports:
       - "8000:8000"
     env_file:  ".env"
-    command: python /app/megabot.py
+    command: python3 /app/megabot.py
